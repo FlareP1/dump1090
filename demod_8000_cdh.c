@@ -55,25 +55,28 @@ static inline int slice_phase4(uint16_t *m) {
 #endif
 
 static inline int slice_phase0(uint16_t *m) {
-    return m[0] + 2*m[1] + 2*m[2] + m[3] - m[4] - 2*m[5] - 2*m[6] -m[7]];
+    return m[0] + 2*m[1] + 2*m[2] + m[3] - m[4] - 2*m[5] - 2*m[6] -m[7];
 }
 static inline int slice_phase1(uint16_t *m) {
-    return -m[0] + m[1] + 2*m[2] + 2*m[3] + m[4] - m[5] - 2*m[6] - 2*m[7]];
+    return -m[0] + m[1] + 2*m[2] + 2*m[3] + m[4] - m[5] - 2*m[6] - 2*m[7];
 }
 static inline int slice_phase2(uint16_t *m) {
-    return -2*m[0] - m[1] + m[2] + 2*m[3] + 2*m[4] + m[5] - m[6] - 2*m[7]];
+    return -2*m[0] - m[1] + m[2] + 2*m[3] + 2*m[4] + m[5] - m[6] - 2*m[7];
 }
 static inline int slice_phase3(uint16_t *m) {
-    return -2*m[0] - 2*m[1] - m[2] + m[3] + 2*m[4] + 2*m[5] + m[6] - m[7]];
+    return -2*m[0] - 2*m[1] - m[2] + m[3] + 2*m[4] + 2*m[5] + m[6] - m[7];
+}
+static inline int slice_phase4(uint16_t *m) {
+    return -m[0] - 2*m[1] - 2*m[2] - m[3] + m[4] + 2*m[5] + 2*m[6] + m[7];
 }
 static inline int slice_phase5(uint16_t *m) {
-    return -m[0] - 2*m[1] - 2*m[2] - m[3] + m[4] + 2*m[5] + 2*m[6] + m[7]];
+    return m[0] - m[1] - 2*m[2] - 2*m[3] - m[4] + m[5] + 2*m[6] + 2*m[7];
 }
 static inline int slice_phase6(uint16_t *m) {
-    return m[0] - m[1] - 2*m[2] - 2*m[3] - m[4] + m[5] + 2*m[6] + 2*m[7]];
+    return 2*m[0] + m[1] - m[2] - 2*m[3] - 2*m[4] - m[5] + m[6] + 2*m[7];
 }
 static inline int slice_phase7(uint16_t *m) {
-    return 2*m[0] + m[1] - m[2] - 2*m[3] - 2*m[4] - m[5] + m[6] + 2*m[7]];
+    return 2*m[0] + 2*m[1] + m[2] - m[3] - 2*m[4] - 2*m[5] - m[6] + m[7];
 }
 
 
@@ -94,13 +97,13 @@ static inline int correlate_phase4(uint16_t *m) {
     return slice_phase4(m) * 20;
 }
 static inline int correlate_phase5(uint16_t *m) {
-    return slice_phase4(m) * 20;
+    return slice_phase5(m) * 20;
 }
 static inline int correlate_phase6(uint16_t *m) {
-    return slice_phase4(m) * 20;
+    return slice_phase6(m) * 20;
 }
 static inline int correlate_phase7(uint16_t *m) {
-    return slice_phase4(m) * 20;
+    return slice_phase7(m) * 20;
 }
 
 //
@@ -274,11 +277,78 @@ static int best_phase(uint16_t *m) {
     return best;
 }
 
+static int8_t testPreamble(uint16_t *preamble, int *high, uint32_t *base_signal, uint32_t *base_noise)
+{
+    // Create a matched filter to look for preamble sequence
+    // Measure high level in 1's, noise in 0's and average in base_signal
+
+    // Look for a message starting at around sample 0 with phase offset 3..7
+    // The preamble is the follow sequence samples at 2MSPS
+    // 0   1   2   3   4   5   6   7   
+    // 1 0 1 0 0 0 0 1 0 1 0 0 0 0 0 0
+
+    // At 8MSPS with phase of 0 it should look like this
+    // 0         1         2         3         4         5         6         7
+    // 1111 0000 1111 0000 0000 0000 0000 1111 0000 1111 0000 0000 0000 0000 0000 0000
+
+    if (preamble[0] > preamble[4] &&                                        // 0
+        preamble[4] < preamble[8] && preamble[8] > preamble[12] &&          // 1
+        preamble[24] < preamble[28] && preamble[28] > preamble[32] &&       // 3.5
+        preamble[32] < preamble[36])                                        // 4.5
+        {      
+            *high = (preamble[0] + preamble[8] + preamble[28] + preamble[32]) / 4;
+            *base_signal = preamble[0] + preamble[8] + preamble[28];
+            *base_noise = preamble[16] + preamble[20] + preamble[24];
+
+            return 1;
+        }
+        else
+        {
+          //fprintf(stderr,"preamble rejected \n");
+          //fprintf(stderr,"%i %i %i %i %i %i %i %i %i %i %i %i %i %i\n", 
+          //preamble[0], preamble[4], preamble[8], preamble[12],
+          //preamble[16], preamble[20], preamble[24], preamble[28],
+          //preamble[32], preamble[36], preamble[40], preamble[44],
+          //preamble[48], preamble[52]);
+
+          //fprintf(stderr,"%i %i %i %i %i %i\n", 
+          //preamble[0] > preamble[4],
+          //preamble[4] < preamble[8],
+          //preamble[8] > preamble[12],
+          //preamble[24] < preamble[28],
+          //preamble[28] > preamble[32],
+          //preamble[32] < preamble[36] );
+
+
+
+          return 0;
+        }
+}
+
+static uint8_t DecodeByte(uint16_t *pPtr, int phase)
+{
+    uint16_t *pPtrInternal;  
+    uint8_t theByte;
+
+    pPtrInternal = pPtr + phase;
+    theByte = 
+    (slice_phase0(pPtrInternal) > 0 ? 0x80 : 0) |
+    (slice_phase0(pPtrInternal+8) > 0 ? 0x40 : 0) |
+    (slice_phase0(pPtrInternal+16) > 0 ? 0x20 : 0) |
+    (slice_phase0(pPtrInternal+24) > 0 ? 0x10 : 0) |
+    (slice_phase0(pPtrInternal+32) > 0 ? 0x08 : 0) |
+    (slice_phase0(pPtrInternal+40) > 0 ? 0x04 : 0) |
+    (slice_phase0(pPtrInternal+48) > 0 ? 0x02 : 0) |
+    (slice_phase0(pPtrInternal+56) > 0 ? 0x01 : 0);
+
+    return theByte;
+}
+
 //
 // Given 'mlen' magnitude samples in 'm', sampled at 8.0MHz,
 // try to demodulate some Mode S messages.
 //
-void demodulate8000(struct mag_buf *mag)
+void demodulate8000_cdh(struct mag_buf *mag)
 {
     struct modesMessage mm;
     unsigned char msg1[MODES_LONG_MSG_BYTES], msg2[MODES_LONG_MSG_BYTES], *msg;
@@ -307,7 +377,7 @@ void demodulate8000(struct mag_buf *mag)
         // 0   1   2   3   4   5   6   7   
         // 1 0 1 0 0 0 0 1 0 1 0 0 0 0 0 0
 
-        // At 8MSPS it should look like this
+        // At 8MSPS with phase of 0 it should look like this
         // 0         1         2         3         4         5         6         7
         // 1111 0000 1111 0000 0000 0000 0000 1111 0000 1111 0000 0000 0000 0000 0000 0000
 
@@ -331,9 +401,12 @@ void demodulate8000(struct mag_buf *mag)
         //
         
         // quick check: we must have a rising edge 0->1 and a falling edge 12->13
-        if (! (preamble[0] < preamble[1] && preamble[12] > preamble[13]) )
+        if (! (preamble[0] > preamble[4] && preamble[36] > preamble[40]) )
            continue;
 
+        //fprintf(stderr,"Found preamble #1\n");
+
+#if 0        
         if (preamble[1] > preamble[2] &&                                       // 1
             preamble[2] < preamble[3] && preamble[3] > preamble[4] &&          // 3
             preamble[8] < preamble[9] && preamble[9] > preamble[10] &&         // 9
@@ -342,6 +415,7 @@ void demodulate8000(struct mag_buf *mag)
             high = (preamble[1] + preamble[3] + preamble[9] + preamble[11] + preamble[12]) / 4;
             base_signal = preamble[1] + preamble[3] + preamble[9];
             base_noise = preamble[5] + preamble[6] + preamble[7];
+
         } else if (preamble[1] > preamble[2] &&                                // 1
                    preamble[2] < preamble[3] && preamble[3] > preamble[4] &&   // 3
                    preamble[8] < preamble[9] && preamble[9] > preamble[10] &&  // 9
@@ -378,11 +452,24 @@ void demodulate8000(struct mag_buf *mag)
             // no suitable peaks
             continue;
         }
+#endif
+
+        if(!testPreamble(preamble, &high, &base_signal, &base_noise))
+        {
+            //no suitable peaks
+
+            continue;
+        }
+
+        //fprintf(stderr,"Found preamble #2\n");
 
         // Check for enough signal
         if (base_signal * 2 < 3 * base_noise) // about 3.5dB SNR
             continue;
 
+        //fprintf(stderr,"Found preamble #3\n");
+
+#if 0
         // Check that the "quiet" bits 6,7,15,16,17 are actually quiet
         if (preamble[5] >= high ||
             preamble[6] >= high ||
@@ -395,19 +482,38 @@ void demodulate8000(struct mag_buf *mag)
             preamble[18] >= high) {
             continue;
         }
+#endif
+        // Check that the "quiet" bits 6,7,15,16,17 are actually quiet
+        if (preamble[16] >= high ||
+            preamble[20] >= high ||
+            preamble[24] >= high ||
+            preamble[32] >= high ||
+            preamble[40] >= high ||
+            preamble[44] >= high ||
+            preamble[48] >= high ||
+            preamble[52] >= high ||
+            preamble[56] >= high) {
+            continue;
+        }
 
+        //fprintf(stderr,"Found preamble #4\n");
+        
         if (Modes.phase_enhance) {
             first_phase = 4;
-            last_phase = 8;           // try all phases
+            //last_phase = 8;           // try all phases
+            last_phase = 11;           // try all phases
         } else {
             // Crosscorrelate against the first few bits to find a likely phase offset
-            initial_phase = best_phase(&preamble[19]);
+            //initial_phase = best_phase(&preamble[19]);
+            initial_phase = best_phase(&preamble[60]);
             if (initial_phase < 0) {
                 continue; // nothing satisfactory
             }
             
             first_phase = last_phase = initial_phase;  // try only the phase we think it is
         }
+
+        //fprintf(stderr,"Found preamble #5\n");
 
         Modes.stats_current.demod_preambles++;
         bestmsg = NULL; bestscore = -2; bestphase = -1;
@@ -418,28 +524,37 @@ void demodulate8000(struct mag_buf *mag)
             // Decode all the next 112 bits, regardless of the actual message
             // size. We'll check the actual message type later
             
-            pPtr = &m[j+19] + (try_phase/5);
-            phase = try_phase % 5;
+//            pPtr = &m[j+19] + (try_phase/5);
+//            phase = try_phase % 5;
+            pPtr = &m[j+60] + (try_phase/8);
+            phase = try_phase % 8;
 
             bytelen = MODES_LONG_MSG_BYTES;
             for (i = 0; i < bytelen; ++i) {
                 uint8_t theByte = 0;
 
+                //Decode a byte at the give phase offset
+                theByte = DecodeByte(pPtr, phase);
+                //Move to the next byte (8 bits 8x oversampling)
+                pPtr += 64;
+
+#if 0
+                //Decode a byte at the give phase offset
                 switch (phase) {
                 case 0:
                     theByte = 
                         (slice_phase0(pPtr) > 0 ? 0x80 : 0) |
-                        (slice_phase2(pPtr+2) > 0 ? 0x40 : 0) |
-                        (slice_phase4(pPtr+4) > 0 ? 0x20 : 0) |
-                        (slice_phase1(pPtr+7) > 0 ? 0x10 : 0) |
-                        (slice_phase3(pPtr+9) > 0 ? 0x08 : 0) |
-                        (slice_phase0(pPtr+12) > 0 ? 0x04 : 0) |
-                        (slice_phase2(pPtr+14) > 0 ? 0x02 : 0) |
-                        (slice_phase4(pPtr+16) > 0 ? 0x01 : 0);
+                        (slice_phase0(pPtr+8) > 0 ? 0x40 : 0) |
+                        (slice_phase0(pPtr+16) > 0 ? 0x20 : 0) |
+                        (slice_phase0(pPtr+24) > 0 ? 0x10 : 0) |
+                        (slice_phase0(pPtr+32 > 0 ? 0x08 : 0) |
+                        (slice_phase0(pPtr+40) > 0 ? 0x04 : 0) |
+                        (slice_phase0(pPtr+48) > 0 ? 0x02 : 0) |
+                        (slice_phase0(pPtr+56) > 0 ? 0x01 : 0);
 
 
                     phase = 1;
-                    pPtr += 19;
+                    pPtr += 64;
                     break;
                     
                 case 1:
@@ -502,6 +617,7 @@ void demodulate8000(struct mag_buf *mag)
                     pPtr += 20;
                     break;
                 }
+#endif
 
                 msg[i] = theByte;
                 if (i == 0) {
@@ -546,7 +662,8 @@ void demodulate8000(struct mag_buf *mag)
         msglen = modesMessageLenByType(bestmsg[0] >> 3);
 
         // Set initial mm structure details
-        mm.timestampMsg = mag->sampleTimestamp + (j*5) + bestphase;
+        //mm.timestampMsg = mag->sampleTimestamp + (j*5) + bestphase;  // 2.4*5 = 12MHz
+        mm.timestampMsg = mag->sampleTimestamp + (j*12/8) + bestphase; // 8*(12/8) = 12MHz
 
         // compute message receive time as block-start-time + difference in the 12MHz clock
         mm.sysTimestampMsg = mag->sysTimestamp; // start of block time
@@ -574,11 +691,13 @@ void demodulate8000(struct mag_buf *mag)
         {
             double signal_power;
             uint64_t scaled_signal_power = 0;
-            int signal_len = msglen*12/5;
+ //           int signal_len = msglen*12/5;  //Sample rate = 12/5 = 2.4MSPS
+            int signal_len = msglen*8;  //Sample rate = 8MSPS
             int k;
 
             for (k = 0; k < signal_len; ++k) {
-                uint32_t mag = m[j+19+k];
+ //               uint32_t mag = m[j+19+k];
+                uint32_t mag = m[j+60+k];
                 scaled_signal_power += mag * mag;
             }
 
@@ -600,7 +719,9 @@ void demodulate8000(struct mag_buf *mag)
         //  where the preamble of the second message clobbered the last
         //  few bits of the first message, but the message bits didn't
         //  overlap)
-        j += msglen*12/5;
+        
+        //j += msglen*12/5;  //Sample rate = 12/5 = 2.4MSPS
+        j += msglen*8;       //Sample rate = 8MSPS
             
         // Pass data to the next layer
         useModesMessage(&mm);
@@ -613,4 +734,5 @@ void demodulate8000(struct mag_buf *mag)
         Modes.stats_current.noise_power_count += mag->length;
     }
 }
+
 
