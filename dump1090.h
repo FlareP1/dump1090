@@ -215,8 +215,8 @@ typedef void *HANDLE;
 #define MAX_POWER (MAX_AMPLITUDE * MAX_AMPLITUDE)
 
 #define RSP_ACC_SHIFT 13                // sets time constant of averaging filter
-#define RSP_MIN_GAIN_THRESH 512         // increase gain if peaks below this
-#define RSP_MAX_GAIN_THRESH 1024        // decrease gain if peaks above this
+#define RSP_MIN_GAIN_THRESH 4096        // increase gain if ave signal peak below this
+#define RSP_MAX_GAIN_THRESH 8192        // decrease gain if ave signal peak above this
 
 // Include subheaders after all the #defines are in place
 
