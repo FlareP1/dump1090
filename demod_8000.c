@@ -59,6 +59,8 @@ void demodulate8000(struct mag_buf *mag)
     int                     sum;
     int                     i, j;    
 
+    uint64_t sum_scaled_signal_power = 0;
+
     uint16_t *m = mag->data;
     int mlen = (int) mag->length;
 
@@ -95,11 +97,28 @@ void demodulate8000(struct mag_buf *mag)
 
     dbuf = &(Modes.d8m_dbuf[D8M_BUF_OVERLAP]);	// point to start of new data
 
+//    for (j = 0; j < mlen; j++)
+//    {
+//        dbuf[j] = m[j];
+//        dbuf[j] -= m[j+4];          // +4 OK because there are Modes.trailing_samples extra.
+//    }
+
+    // Use oversampling to interate the demod
     for (j = 0; j < mlen; j++)
     {
+        //First Half of Pulse Position Integration
         dbuf[j] = m[j];
+        dbuf[j] += 1.5*m[j+1];          // +4 OK because there are Modes.trailing_samples extra.
+        dbuf[j] += 1.5*m[j+2];          // +4 OK because there are Modes.trailing_samples extra.
+        dbuf[j] += m[j+3];          // +4 OK because there are Modes.trailing_samples extra.
+
+        //Second Half of Pulse Position Integration
         dbuf[j] -= m[j+4];          // +4 OK because there are Modes.trailing_samples extra.
+        dbuf[j] -= 1.5*m[j+5];          // +4 OK because there are Modes.trailing_samples extra.
+        dbuf[j] -= 1.5*m[j+6];          // +4 OK because there are Modes.trailing_samples extra.
+        dbuf[j] -= m[j+7];          // +4 OK because there are Modes.trailing_samples extra.
     }
+
 
 	/* now point to a location which allows the algorithm both some look-back
        and look-ahead in the data.
@@ -154,15 +173,16 @@ void demodulate8000(struct mag_buf *mag)
             }
 
 			// record match value and best phase in arrays
-            match_ar[window] = phase[start_phase];  // use same phase consistently, even if not best
-            phase_ar[window] = best_phase;          // but record the best for later use
+            //match_ar[window] = phase[start_phase];  // use same phase consistently, even if not best
+            match_ar[window] = phase[best_phase];   // record the sum of the demodulation window for this offset (MAY NEED TO PUT THIS BACK)
+            phase_ar[window] = best_phase;          // but record the best for later use (0 to 7)
 
 
 			// save intermediate values 56 before end of match window
-            if (window == D8M_WIN_LEN - MODES_SHORT_MSG_BITS)
+            if (window == (D8M_WIN_LEN - MODES_SHORT_MSG_BITS) )
             {
-                memcpy (backtrack_phase, phase, sizeof(phase));
-                backtrack_phase_av_acc = phase_av_acc;
+                memcpy (backtrack_phase, phase, sizeof(phase));  // Save current phase demodulation in backtrack_phase total 8 bits of demod.
+                backtrack_phase_av_acc = phase_av_acc;           // Save current noise floor accumalation
             }
 
 			// end of match window, now locate peaks and look for valid messages
@@ -180,19 +200,24 @@ void demodulate8000(struct mag_buf *mag)
 				*/
 				
 				msg_bytes = MODES_SHORT_MSG_BYTES;
+                // Set the data pointer to the correct offset
+                // Windows start + best phase offset +  (short message offset measure in peak peak - bits to search back) * 8 phases
                 dptr = win_start + phase_ar[short_msg_offset] + (short_msg_offset - D8M_SEARCH_BACK) * D8M_NUM_PHASES;
                 position = dptr;
 
+                // message type 0 = short message. message type 1 = long message 
                 for (msg_type = 0; msg_type < 2; msg_type++)
                 {
-                    // decode enough bits to search +- a few bits for message
+                    // decode message bits +- a few bits for message search
 					for (i = 0; i < msg_bytes + D8M_SEARCH_BYTES; i++)
                     {
                         data_byte = 0;
 
+                        // Decode a byte at phase offset i
                         for (j = 0; j < 8; j++ )
                         {
-                            sum = dbuf[dptr-1] + dbuf[dptr] + dbuf[dptr+1];   
+                            //sum = dbuf[dptr-1] + dbuf[dptr] + dbuf[dptr+1];   //Integrate this averaging into dbuf
+                            sum = dbuf[dptr];   //Integrate this averaging into dbuf
                             sum = (sum >> 31) & 0x1;                        //sign gives data bit
                             data_byte = (data_byte << 1) | sum;
                             dptr += D8M_NUM_PHASES;
@@ -210,7 +235,10 @@ void demodulate8000(struct mag_buf *mag)
                         {
                             memcpy (best_msg, msg, msg_bytes);	//most plausible message so far
                             best_result = message_result;
-                            position = dptr - 64 + i * 8;		//position recorded for mlat
+                            //position = dptr - 64 + i * 8;		//position recorded for mlat
+                            // position recorded for mlat, correct for shift in dptr during decode
+                            // However if this is a long message the dptr has already been shifted by 
+                            position = dptr - (msg_bytes + D8M_SEARCH_BYTES)*D8M_NUM_PHASES*8 + i * 8;		// position recorded for mlat, correct for shift in dptr during decode
                         }
 
                         shift_bytes (msg, msg_bytes + D8M_SEARCH_BYTES); // shift by one bit
@@ -236,7 +264,38 @@ void demodulate8000(struct mag_buf *mag)
 
                     message_result = decodeModesMessage(&mm, best_msg);
 
-                    if ((mm.addr) && (message_result >= 0)) useModesMessage(&mm);
+                    if ((mm.addr) && (message_result >= 0))
+                    {
+                        // Calculate Power in message
+                        {
+                            double signal_power;
+                            uint64_t scaled_signal_power = 0;
+                            int signal_len = mm.msgbits * 8;  // 8 samples per bit
+                            //int signal_len = msglen * 12 / 5;
+                            int k;
+
+                            for (k = 0; k < signal_len; ++k)
+                            {
+                                //uint32_t mag = m[j + 19 + k];  // Index into 
+                                uint32_t mag = m[position + k - D8M_LOOK_AHEAD];  // Index into mag which has been off set by DM8_LOOK_AHEAD
+                                scaled_signal_power += mag * mag;
+                            }
+
+                            signal_power = scaled_signal_power / 65535.0 / 65535.0;
+                            mm.signalLevel = signal_power / signal_len;
+                            Modes.stats_current.signal_power_sum += signal_power;
+                            Modes.stats_current.signal_power_count += signal_len;
+                            sum_scaled_signal_power += scaled_signal_power;
+
+                            if (mm.signalLevel > Modes.stats_current.peak_signal_power)
+                                Modes.stats_current.peak_signal_power = mm.signalLevel;
+                            if (mm.signalLevel > 0.50119)
+                                Modes.stats_current.strong_signal_count++; // signal power above -3dBFS
+                        }
+
+                        //Report the message
+                        useModesMessage(&mm);
+                    }
                 }
 
                 // now backtrack by 56 bits, as we may have missed peaks in this region
