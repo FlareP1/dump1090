@@ -600,6 +600,7 @@ void demodulate2000(struct mag_buf *mag) {
         uint8_t  theByte, theErrs;
         int msglen, scanlen;
         uint32_t sigLevel, noiseLevel;
+        uint64_t sigPower, noisePower;
         uint16_t snr;
         int message_ok;
 
@@ -712,6 +713,9 @@ void demodulate2000(struct mag_buf *mag) {
         // so include these in the signal strength 
         sigLevel = pPreamble[0] + pPreamble[2] + pPreamble[7] + pPreamble[9];
         noiseLevel = pPreamble[1] + pPreamble[3] + pPreamble[4] + pPreamble[6] + pPreamble[8];
+        sigPower = pPreamble[0]*pPreamble[0] + pPreamble[2]*pPreamble[2] + pPreamble[7]*pPreamble[7] + pPreamble[9]*pPreamble[9];
+        noisePower = pPreamble[1]*pPreamble[1] + pPreamble[3]*pPreamble[3] + pPreamble[4]*pPreamble[4] + pPreamble[6]*pPreamble[6] + pPreamble[8]*pPreamble[8];
+
 
         msglen = scanlen = MODES_LONG_MSG_BITS;
         for (i = 0; i < scanlen; i++) {
@@ -719,11 +723,11 @@ void demodulate2000(struct mag_buf *mag) {
             uint32_t b = *pPtr++;
 
             if      (a > b) 
-                {theByte |= 1; if (i < 56) { sigLevel += a; noiseLevel += b; }}
+                {theByte |= 1; if (i < 56) { sigLevel += a; noiseLevel += b; sigPower += a*a; noisePower += b*b; }}
             else if (a < b) 
-                {/*theByte |= 0;*/ if (i < 56) { sigLevel += b; noiseLevel += a; }}
+                {/*theByte |= 0;*/ if (i < 56) { sigLevel += b; noiseLevel += a; sigPower += b*b; noisePower += a*a; }}
             else {
-                if (i < 56) { sigLevel += a; noiseLevel += a; }
+                if (i < 56) { sigLevel += a; noiseLevel += a; sigPower += a*a; noisePower += b*b; }
                 if (i >= MODES_SHORT_MSG_BITS) //(a == b), and we're in the long part of a frame
                     {errors++;  /*theByte |= 0;*/}
                 else if (i >= 5)                    //(a == b), and we're in the short part of a frame
@@ -834,7 +838,12 @@ void demodulate2000(struct mag_buf *mag) {
             mm.sysTimestampMsg.tv_nsec += receiveclock_ns_elapsed(mag->sampleTimestamp, mm.timestampMsg);
             normalize_timespec(&mm.sysTimestampMsg);
 
-            mm.signalLevel = (365.0*60 + sigLevel + noiseLevel) * (365.0*60 + sigLevel + noiseLevel) / MAX_POWER / 60 / 60;
+            //mm.signalLevel = (365.0*60 + sigLevel + noiseLevel) * (365.0*60 + sigLevel + noiseLevel) / MAX_POWER / 60 / 60;
+            double signal_power = (sigPower + noisePower) / 65535.0 / 65535.0;
+            uint32_t signal_len = (MODES_SHORT_MSG_BITS + 10);  //That the power was calculated over
+            mm.signalLevel = signal_power / signal_len;
+            Modes.stats_current.signal_power_sum += signal_power;
+            Modes.stats_current.signal_power_count += signal_len;
 
             // Decode the received message
             result = decodeModesMessage(&mm, msg);
