@@ -1,3 +1,12 @@
+# Updates
+
+This branch has a number of updates and fixes to try and address problems with the SDRPlay version of dump1090
+* Detect and remove dropped USB samples to fix MLAT rejections from PiAware/Flightawre servers
+* Fix indexing error in MLAT timestamping calculation
+* Increase default ADC target levels for reciver gain
+* Replace 8000MHz demodulator with experimental demodulator re-written from Dump1090 2400 demodulator
+* Add power calculation to oversampled demodulators
+
 # dump1090-mutability Debian/Raspbian packages
 [![Build Status](https://travis-ci.org/mutability/dump1090.svg?branch=master)](https://travis-ci.org/mutability/dump1090)
 
