@@ -55,55 +55,55 @@ static inline int slice_phase4(uint16_t *m) {
 #endif
 
 static inline int slice_phase0(uint16_t *m) {
-    return m[0] + 2*m[1] + 2*m[2] + m[3] - m[4] - 2*m[5] - 2*m[6] -m[7];
+    return m[0] + m[1] + m[2] + m[3] - m[4] - m[5] - m[6] - m[7];
 }
 static inline int slice_phase1(uint16_t *m) {
-    return -m[0] + m[1] + 2*m[2] + 2*m[3] + m[4] - m[5] - 2*m[6] - 2*m[7];
+    return m[0] + m[1] + m[2] + m[3] + m[4] - m[5] - m[6] - m[7];
 }
 static inline int slice_phase2(uint16_t *m) {
-    return -2*m[0] - m[1] + m[2] + 2*m[3] + 2*m[4] + m[5] - m[6] - 2*m[7];
+    return m[0] - m[1] + m[2] + m[3] + m[4] + m[5] - m[6] - m[7];
 }
 static inline int slice_phase3(uint16_t *m) {
-    return -2*m[0] - 2*m[1] - m[2] + m[3] + 2*m[4] + 2*m[5] + m[6] - m[7];
+    return m[0] - m[1] - m[2] + m[3] + m[4] + m[5] + m[6] - m[7];
 }
 static inline int slice_phase4(uint16_t *m) {
-    return -m[0] - 2*m[1] - 2*m[2] - m[3] + m[4] + 2*m[5] + 2*m[6] + m[7];
+    return m[0] - m[1] - m[2] - m[3] + m[4] + m[5] + m[6] + m[7];
 }
 static inline int slice_phase5(uint16_t *m) {
-    return m[0] - m[1] - 2*m[2] - 2*m[3] - m[4] + m[5] + 2*m[6] + 2*m[7];
+    return m[0] - m[1] - m[2] - m[3] - m[4] + m[5] + m[6] + m[7];
 }
 static inline int slice_phase6(uint16_t *m) {
-    return 2*m[0] + m[1] - m[2] - 2*m[3] - 2*m[4] - m[5] + m[6] + 2*m[7];
+    return m[0] + m[1] - m[2] - m[3] - m[4] - m[5] + m[6] + m[7];
 }
 static inline int slice_phase7(uint16_t *m) {
-    return 2*m[0] + 2*m[1] + m[2] - m[3] - 2*m[4] - 2*m[5] - m[6] + m[7];
+    return m[0] + m[1] + m[2] - m[3] - m[4] - m[5] - m[6] + m[7];
 }
 
 
 
 static inline int correlate_phase0(uint16_t *m) {
-    return slice_phase0(m) * 20;
+    return slice_phase0(m) * 8;
 }
 static inline int correlate_phase1(uint16_t *m) {
-    return slice_phase1(m) * 20;
+    return slice_phase1(m) * 8;
 }
 static inline int correlate_phase2(uint16_t *m) {
-    return slice_phase2(m) * 20;
+    return slice_phase2(m) * 8;
 }
 static inline int correlate_phase3(uint16_t *m) {
-    return slice_phase3(m) * 20;
+    return slice_phase3(m) * 8;
 }
 static inline int correlate_phase4(uint16_t *m) {
-    return slice_phase4(m) * 20;
+    return slice_phase4(m) * 8;
 }
 static inline int correlate_phase5(uint16_t *m) {
-    return slice_phase5(m) * 20;
+    return slice_phase5(m) * 8;
 }
 static inline int correlate_phase6(uint16_t *m) {
-    return slice_phase6(m) * 20;
+    return slice_phase6(m) * 8;
 }
 static inline int correlate_phase7(uint16_t *m) {
-    return slice_phase7(m) * 20;
+    return slice_phase7(m) * 8;
 }
 
 //
@@ -399,7 +399,7 @@ void demodulate8000_cdh(struct mag_buf *mag)
         // phase 6: 0/4\2 2/4\0 0 0 0 2/4\0/5\1 0 0 0 0 0 0 X2
         // phase 7: 0/3 3\1/5\0 0 0 0 1/5\0/4\2 0 0 0 0 0 0 X3
         //
-        
+
         // quick check: we must have a rising edge 0->1 and a falling edge 12->13
         if (! (preamble[0] > preamble[4] && preamble[36] > preamble[40]) )
            continue;
