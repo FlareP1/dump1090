@@ -2124,8 +2124,8 @@ int main(int argc, char **argv) {
                     if (Modes.use_rtlsdr)
                         demodulate2400(buf);
                     else
-                        //demodulate8000(buf);
-                        demodulate8000_cdh(buf);
+                        demodulate8000(buf);
+                        //demodulate8000_cdh(buf);
 
                 } else {
                     demodulate2000(buf);
