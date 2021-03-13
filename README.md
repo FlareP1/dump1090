@@ -1,3 +1,5 @@
+# This branch is un-maintained see API3 branch for latest updates
+
 # dump1090-mutability Debian/Raspbian packages
 [![Build Status](https://travis-ci.org/mutability/dump1090.svg?branch=master)](https://travis-ci.org/mutability/dump1090)
 
