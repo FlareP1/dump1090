@@ -859,9 +859,36 @@ int modesInitSDRplay(void) {
 // A Mutex is used to avoid races with the decoding thread.
 //
 
+/* Subtract the ‘struct timeval’ values X and Y,
+   storing the result in RESULT.
+   Return 1 if the difference is negative, otherwise 0. */
+
+static int timeval_subtract (struct timespec *result, struct timespec *x, struct timespec *y)
+{
+  /* Perform the carry for the later subtraction by updating y. */
+  if (x->tv_nsec < y->tv_nsec) {
+    int nsec = (y->tv_nsec - x->tv_nsec) / 1000000000 + 1;
+    y->tv_nsec -= 1000000000 * nsec;
+    y->tv_sec += nsec;
+  }
+  if (x->tv_nsec - y->tv_nsec > 1000000000) {
+    int nsec = (x->tv_nsec - y->tv_nsec) / 1000000000;
+    y->tv_nsec += 1000000000 * nsec;
+    y->tv_sec -= nsec;
+  }
+
+  /* Compute the time remaining to wait.
+     tv_usec is certainly positive. */
+  result->tv_sec = x->tv_sec - y->tv_sec;
+  result->tv_nsec = x->tv_nsec - y->tv_nsec;
+
+  /* Return 1 if result is negative. */
+  return x->tv_sec < y->tv_sec;
+}
+
 static struct timespec reader_thread_start;
 
-void rtlsdrCallback(unsigned char *buf, uint32_t len, void *ctx) {
+void rtlsdrCallback(unsigned char *buf, uint32_t len, unsigned int startSamples, void *ctx) {
     struct mag_buf *outbuf;
     struct mag_buf *lastbuf;
     uint32_t slen;
@@ -872,6 +899,16 @@ void rtlsdrCallback(unsigned char *buf, uint32_t len, void *ctx) {
     static int was_odd = 0; // paranoia!!
     static int dropping = 0;
 
+#if 0
+    static int timeZeroSet = 0;
+    static uint64_t timeZeroSamples = 0;
+    static struct timespec timeZero;
+
+    struct timespec ElapsedTime;
+    static uint64_t ElapsedTimeSamples;
+    static count =0;
+#endif
+ 
     MODES_NOTUSED(ctx);
 
     // Lock the data buffer variables before accessing them
@@ -925,7 +962,8 @@ void rtlsdrCallback(unsigned char *buf, uint32_t len, void *ctx) {
     pthread_mutex_unlock(&Modes.data_mutex);
 
     // Compute the sample timestamp and system timestamp for the start of the block
-    outbuf->sampleTimestamp = lastbuf->sampleTimestamp + 12e6 * (lastbuf->length + outbuf->dropped) / Modes.sample_rate;
+    //outbuf->sampleTimestamp = lastbuf->sampleTimestamp + (12e6 * (lastbuf->length + outbuf->dropped)) / Modes.sample_rate;
+    outbuf->sampleTimestamp = startSamples *12e6/Modes.sample_rate;
     block_duration = 1e9 * slen / Modes.sample_rate;
 
     // Get the approx system time for the start of this block
@@ -943,6 +981,45 @@ void rtlsdrCallback(unsigned char *buf, uint32_t len, void *ctx) {
     // Convert the new data
     outbuf->length = slen;
     convert_samples(buf, &outbuf->data[Modes.trailing_samples], slen, &outbuf->total_power);
+
+#if 0
+    //Compare Sytem time with predicted samples timestamp
+    //Over time these should be the same
+    //Therefore compare to a static reference
+    if(!timeZeroSet)
+    {
+        timeZero = outbuf->sysTimestamp;
+        timeZeroSamples = outbuf->sampleTimestamp;
+        timeZeroSet = 1;
+    }
+    
+    timeval_subtract(&ElapsedTime, &outbuf->sysTimestamp, &timeZero);
+    ElapsedTimeSamples = outbuf->sampleTimestamp - timeZeroSamples;    
+
+    double elapseTimeSec = (ElapsedTime.tv_sec*1e9 + ElapsedTime.tv_nsec)/1e9;
+    double elapseSamplesSec = ElapsedTimeSamples/12e6;
+ 
+ if((count++ % 100)==0)
+ {
+    fprintf(stderr,"Timing Debug %i %i %i %i %lld %lld %i %i %lld %lld %lld %lld %f %f %f\n",
+    lastbuf->length,
+    slen,
+    Modes.trailing_samples,
+    lastbuf->dropped,
+    lastbuf->sampleTimestamp,
+    lastbuf->sysTimestamp,
+    outbuf->length,
+    outbuf->dropped,
+    outbuf->sampleTimestamp,
+    outbuf->sysTimestamp,
+    (uint64_t)(ElapsedTime.tv_sec*1e9 + ElapsedTime.tv_nsec),
+    ElapsedTimeSamples,
+    elapseTimeSec,
+    elapseSamplesSec,
+    (elapseTimeSec-elapseSamplesSec)*8e6
+    );
+ }
+ #endif
 
     // Push the new data to the demodulation thread
     pthread_mutex_lock(&Modes.data_mutex);
@@ -1141,7 +1218,7 @@ void sdrplayEventCallback(sdrplay_api_EventT eventId, sdrplay_api_TunerSelectT t
 
 void sdrplayCallbackA(short *xi, short *xq, sdrplay_api_StreamCbParamsT *params, unsigned int numSamples, unsigned int reset, void *cbContext)
 {
-    MODES_NOTUSED(params);
+    //MODES_NOTUSED(params);
     MODES_NOTUSED(reset);
     MODES_NOTUSED(cbContext);
 
@@ -1149,19 +1226,49 @@ void sdrplayCallbackA(short *xi, short *xq, sdrplay_api_StreamCbParamsT *params,
     int sig_i, sig_q, max_sig;
     unsigned int end, input_index;
 
+    static int max_ADC =0;
     // Initialise heavily-used locals from Modes struct
     short *dptr = Modes.sdrplay_data;
     
     int max_sig_acc = Modes.max_sig;
     unsigned int data_index = Modes.data_index;
 
+    static uint32_t sampleCount = 0;
+    static uint32_t initialsampleCount = 0;
+    static uint32_t prevsampleCount = 0;
+    static int initCount=0;
+    static int diff=0;
+    int droppedSamples=0;  
+    static unsigned int nextTimestamp=0; 
+
+    //Debug to look for dropped samples
+    if(initCount==0)
+    {
+        nextTimestamp=params->firstSampleNum;  // Set the timestamp for the first block
+        prevsampleCount=params->firstSampleNum;
+        initCount=1;
+    }
+
+    // Compare new sample cound with previous sample count and number of samples recieved 
+    // To detect dropped samples
+    if( (params->firstSampleNum-params->numSamples) > prevsampleCount )
+    {
+        droppedSamples=((params->firstSampleNum-params->numSamples) - prevsampleCount)/2;        
+        data_index=0; //We lost some samples so need to invalidate this buffer and try again
+    }
+    
+    prevsampleCount=params->firstSampleNum;
     // Assumptions; numSamples * 2 is smaller than MODES_RSP_BUF_SIZE, so either 0 or 1 buffers handed off
     // Think about what's going to happen, will we overrun end, will we fill a buffer?
-        
+          
     /* count1 is lesser of input samples and samples to end of buffer */
     /* count2 is the remainder, generally zero */
 
-    end = data_index + (numSamples << 1);
+    // numSamples is number of complex samples
+    // count1 is 2* number of complex samples to be put in current buffer
+    // count2 is 2* number of complex samples to be put into beginning of circular buffer if we overflowed 
+
+    end = data_index + (numSamples << 1);  // Samples are complex so double pointer numSamples<<1 
     count2 = end - (MODES_RSP_BUF_SIZE * MODES_RSP_BUFFERS);
     if (count2 < 0) count2 = 0;            /* count2 is samples wrapping around to start of buf */
 
@@ -1171,8 +1278,8 @@ void sdrplayCallbackA(short *xi, short *xq, sdrplay_api_StreamCbParamsT *params,
 
     new_buf_flag = ((data_index & (MODES_RSP_BUF_SIZE-1)) < (end & (MODES_RSP_BUF_SIZE-1)))? 0 : 1;
 
-    /* now interleave data from I/Q into circular buffer, and note max I value */
-    
+    /* now interleave data from I/Q into circular buffer, and note max I value */ 
+
     input_index = 0;
     max_sig = 0;
 
@@ -1191,6 +1298,7 @@ void sdrplayCallbackA(short *xi, short *xq, sdrplay_api_StreamCbParamsT *params,
 
     /* apply slowly decaying filter to max signal value */
 
+    if(max_sig > max_ADC) max_ADC = max_sig;
     max_sig -= 127;
     max_sig_acc += max_sig;
     max_sig = max_sig_acc >> RSP_ACC_SHIFT;
@@ -1202,20 +1310,41 @@ void sdrplayCallbackA(short *xi, short *xq, sdrplay_api_StreamCbParamsT *params,
     {
         data_index = 0;  // pointer back to start of buffer */
 
+    // Check actual ADC values, it appears that a tracked level of 500-1000 is similar to a max of ~ 16000
+    // So actually not too bad
+	//fprintf(stderr,"MaxADC %i AveMax %i Gain %i \n",max_ADC, max_sig, chParams->tunerParams.gain.gRdB); 
+	
+	//if(max_ADC > 32000) {
+	//   	chParams->tunerParams.gain.gRdB +=1;
+	//	if (chParams->tunerParams.gain.gRdB > 59) chParams->tunerParams.gain.gRdB = 59;
+  	//	sdrplay_api_Update(chosenDev->dev, chosenDev->tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+	//}
+    //    if(max_ADC < 24000) {
+    //            chParams->tunerParams.gain.gRdB -=1;
+    //            if (chParams->tunerParams.gain.gRdB < 0) chParams->tunerParams.gain.gRdB = 0;
+    //            sdrplay_api_Update(chosenDev->dev, chosenDev->tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+	//}
+
         /* adjust gain if required */
-        if (max_sig > RSP_MAX_GAIN_THRESH) {
+        if (max_sig > RSP_MAX_GAIN_THRESH)
+        {
             chParams->tunerParams.gain.gRdB += 1;
-            if (chParams->tunerParams.gain.gRdB > 59) chParams->tunerParams.gain.gRdB = 59;
+            if (chParams->tunerParams.gain.gRdB > 59)
+                chParams->tunerParams.gain.gRdB = 59;
             sdrplay_api_Update(chosenDev->dev, chosenDev->tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
         }
-        if (max_sig < RSP_MIN_GAIN_THRESH) {
+        if (max_sig < RSP_MIN_GAIN_THRESH)
+        {
             chParams->tunerParams.gain.gRdB -= 1;
-            if (chParams->tunerParams.gain.gRdB < 0) chParams->tunerParams.gain.gRdB = 0;
+            if (chParams->tunerParams.gain.gRdB < 0)
+                chParams->tunerParams.gain.gRdB = 0;
             sdrplay_api_Update(chosenDev->dev, chosenDev->tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
         }
+
+    max_ADC=0;
     }
 
-    /* insert any remaining signal at start of buffer */
+    /* insert any remaining signal at start of circular buffer */
 
     for (i = (count2 >> 1) - 1; i >= 0; i--)
     {
@@ -1230,13 +1359,20 @@ void sdrplayCallbackA(short *xi, short *xq, sdrplay_api_StreamCbParamsT *params,
 
     if (new_buf_flag)
     {
+        uint64_t tmpend;
+
         /* go back by one buffer length, then round down further to start of buffer */
-        end = data_index + MODES_RSP_BUF_SIZE * (MODES_RSP_BUFFERS-1);
-        end &= MODES_RSP_BUF_SIZE * MODES_RSP_BUFFERS - 1;
-        end &= ~(MODES_RSP_BUF_SIZE-1);
+        end = data_index + MODES_RSP_BUF_SIZE * (MODES_RSP_BUFFERS-1);   // Compute data pointer + (N-1)*BUF_SIZE , this will be off end of buffer
+        end &= MODES_RSP_BUF_SIZE * MODES_RSP_BUFFERS - 1;               // Modulus the data pointer by the total buffer size to get the remainder
+        tmpend = end; 
+        end &= ~(MODES_RSP_BUF_SIZE-1);                                  // Round down by BUFF_SIZE
+  
+        /* calculate effective timestamp for this buffer from latest timestamp */
+        /* current block time + num samples in block - buff_size_samples - rounded_down_samples */
+        nextTimestamp = params->firstSampleNum + (count1 - MODES_RSP_BUF_SIZE - (tmpend-end))/2;
 
         /* now pretend this came from an rtlsdr device */
-        rtlsdrCallback((unsigned char *)&Modes.sdrplay_data[end], MODES_RSP_BUF_SIZE, NULL);
+        rtlsdrCallback((unsigned char *)&Modes.sdrplay_data[end], MODES_RSP_BUF_SIZE, nextTimestamp, NULL);
     }
 
     /* stash static values in Modes struct */
@@ -1988,7 +2124,9 @@ int main(int argc, char **argv) {
                     if (Modes.use_rtlsdr)
                         demodulate2400(buf);
                     else
-                        demodulate8000(buf);
+                        //demodulate8000(buf);
+                        demodulate8000_cdh(buf);
+
                 } else {
                     demodulate2000(buf);
                 }
